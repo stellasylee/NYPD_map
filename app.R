@@ -8,23 +8,15 @@ library(rgeos)
 library(sf)
 library(htmltools)
 
-# Load dataset and helper functions/data ----
-path = "C:\\Users\\stella\\Documents\\GitHub\\NYPD_map\\"
-
-if(!exists("arrestData")) arrestData <- read.csv(paste0(path, "ArrestDat.csv"), header=TRUE)
-if(!exists("precincts1")) precincts1 <- sf::st_read(paste0(path, "\\precincts1\\nypp.shp"))
-
-pop_data <- arrestData[arrestData$Year == 2010,]
-pop_data <- select(pop_data, "Precinct", "Population", "Area", "AsPac", "Black", "Hisp", "Native", "White")
-
-exp_minus_one <- function(x) { round( exp(x)-1 ) }
+source('initialize.R')
+print("Finished initializing")
 
 #--------------------------------------------------------------------------------------------------------------------#
 #                                             DEFINE USER INTERFACE                                                  #
 #--------------------------------------------------------------------------------------------------------------------#
 # Define body of dashboard ----
 body <- dashboardBody(
-    tags$head(tags$style(HTML('
+  tags$head(tags$style(HTML('
                          /* Sidebar font size */
                               .sidebar-menu>li>a {
                                    font-size:16px;
@@ -54,58 +46,55 @@ body <- dashboardBody(
                               .main-header .navbar {
                                    display: none;
                               }
-
                              '))),
-    
-    title = "NYPD Precincts", skin="blue",
-    
-    fluidPage(fluidRow(
-        column(8,
-               box(title = "Map of Police Precincts", solidHeader=T, status="primary", width = '100%',
-                   div(leafletOutput("nycMap", height = 450)),
-                   div(htmlOutput("footer"), align = "right")
+  
+  title = "NYPD Precincts", skin="blue",
+  
+  fluidPage(fluidRow(
+    column(8,
+           box(title = "Map of Police Precincts", solidHeader=T, status="primary", width = '100%',
+               div(leafletOutput("nycMap", height = 450)),
+               div(htmlOutput("footer"), align = "right")
+           ),
+           
+           box(title="Map Options", status = "primary", solidHeader=T, collapsible=T, width = '100%',
+               selectInput('year', 'Year', seq(2005, 2018), selectize=TRUE),
+               
+               div(style = 'display: flex',
+                   div(style = 'flex: 2',
+                       selectInput("colorby","Color Precincts by:",choices=c(
+                         "Total number of arrests, weighted by precinct population" = "arrests_weighted",
+                         "Total number of arrests" = "arrests_raw",
+                         "Total number of arrests for each race" = "race_arr",
+                         "Number of arrests by race, weighted by precinct population" = "race_weighted",
+                         "Racial distribution for each precinct" = "race_dist"))),
+                   
+                   div(style = 'flex: 1',
+                       conditionalPanel(condition = "input.colorby == 'race_dist' ||
+                                                                         input.colorby == 'race_arr' || input.colorby == 'race_weighted'",
+                                        selectInput("race", "Race", choices = c(
+                                          "White" = "W",
+                                          "Black" = "B",
+                                          "Hispanic" = "H"
+                                          #"Asian/Pacific islander" = "A",
+                                          #"Native American" = "N"
+                                        ))))
                ),
                
-               box(title="Map Options", status = "primary", solidHeader=T, collapsible=T, width = '100%',
-                   
-                   div(style = 'display: flex',
-                       div(style = 'flex: 2',
-                           selectInput("colorby","Color Precincts by:",choices=c(
-                               "Total number of arrests, weighted by precinct population" = "arrests_weighted",
-                               "Total number of arrests" = "arrests_raw",
-                               "Total number of arrests for each race" = "race_arr",
-                               "Number of arrests by race, weighted by precinct population" = "race_weighted",
-                               "Racial distribution for each precinct" = "race_dist"))),
-                       
-                       div(style = 'flex: 1',
-                           conditionalPanel(condition = "input.colorby == 'race_dist' ||
-                                                                         input.colorby == 'race_arr' || input.colorby == 'race_weighted'",
-                                            selectInput("race", "Race", choices = c(
-                                                "White" = "W",
-                                                "Black" = "B",
-                                                "Hispanic" = "H"
-                                                #"Asian/Pacific islander" = "A",
-                                                #"Native American" = "N"
-                                            ))))
-                   ),
-                   
-                   div(style = 'display: flex',
-                       div(style = 'flex: 1',
-                           selectizeInput('removePrecincts', "Remove precincts", multiple = TRUE,
-                                          choices=arrestData$Precinct, selected = c(22, 50))),
-                       div(style = 'flex: 1',
-                           selectizeInput('filterPrecincts', "Filter precincts", multiple = TRUE,
-                                          choices = c("Show all", arrestData$Precinct),
-                                          selected = "Show all",
-                                          options = list(maxItems = 5)))),
-                   
-                   radioButtons('scale', "Scale", choices = c('Linear', 'Logarithmic'), inline = TRUE,
-                                selected = "Logarithmic"),
-                   
-                   sliderInput('year', "Year Range", min = 2005, max = 2018, value = c(2005, 2018), sep = "", animate = TRUE)
-                   
-               ))
-    )))
+               div(style = 'display: flex',
+                   div(style = 'flex: 1',
+                       selectizeInput('removePrecincts', "Remove precincts", multiple = TRUE,
+                                      choices=arrestData$Precinct, selected = c(22, 50))),
+                   div(style = 'flex: 1',
+                       selectizeInput('filterPrecincts', "Filter precincts", multiple = TRUE,
+                                      choices = c("Show all", arrestData$Precinct),
+                                      selected = "Show all",
+                                      options = list(maxItems = 5)))),
+               
+               radioButtons('scale', "Scale", choices = c('Linear', 'Logarithmic'), inline = TRUE,
+                            selected = "Logarithmic")
+           ))
+  )))
 
 # UI with Header, Sidebar, and body ----
 ui <- dashboardPage(dashboardHeader(title = "Stop-and-Frisk in New York City"),
@@ -115,13 +104,9 @@ ui <- dashboardPage(dashboardHeader(title = "Stop-and-Frisk in New York City"),
 #                                             DEFINE SERVER LOGIC                                                    #
 #--------------------------------------------------------------------------------------------------------------------#
 server <- function(input, output, session) {
-
   # Selects data for applicable years
   arrestDat <- reactive({
-    map_data = arrestData[arrestData$Year >= input$year[1] & arrestData$Year <= input$year[2], ]
-    map_data = aggregate(map_data, by = list(Precinct = map_data$Precinct), FUN = sum)
-    map_data = select(map_data, "Precinct", "AsPacA", "BlackA", "HispA", "NativeA", "WhiteA", "TotalA")
-    map_data = left_join(map_data, pop_data, by = "Precinct")
+    map_data = arrestData[arrestData$Year == input$year[1], ]
     return(map_data)
   })
   
@@ -160,7 +145,7 @@ server <- function(input, output, session) {
       }
     }})
   
-  #    Define color vector, according to user input
+  # Define color vector, according to user input
   countryVar <- reactive({
     linearValues <- {
       if(input$colorby == "race_dist"){
@@ -191,7 +176,8 @@ server <- function(input, output, session) {
                "arrests_raw" = filteredData()$TotalA)}
     }
     
-    if( input$scale == 'Logarithmic') { log(linearValues+1)
+    if( input$scale == 'Logarithmic') {
+      log(linearValues+1)
     } else { linearValues }
     
   })
@@ -202,7 +188,7 @@ server <- function(input, output, session) {
     upper <- max(values)
     return (leaflet::colorNumeric(rev(heat.colors(10)), c(lower, upper), 10))
   })
-
+  
   # Render base map ----
   output$nycMap <- renderLeaflet({
     leaflet() %>%
@@ -211,21 +197,10 @@ server <- function(input, output, session) {
       setMaxBounds(-73.000, 40.200, -75.000, 41.100)
   })
   
-  
-  popup_label <- reactive({
-    precinctOverData <- arrestDat[arrestDat$Precinct==filteredPrecincts()$Precinct,]
-    popup_label = sprintf(
-    "<b><center><h2>Precinct %s</h2></center></b></br>
-                        <b>Area:</b> %s square miles</br>
-                        <table style='width:100%%'><tr><td><b>Population:</b> %s (2010 census)",
-    precinctOverData$Precinct, precinctOverData$Area, precinctOverData$Population)
-    return(popup_label %>% lapply(htmltools::HTML))
-  })
-  
   # Create instance of base map where polygons can be added
   MapProxy <- leafletProxy('nycMap')
-
-  # Rerender the map whenever an input changes ----
+  
+  # Re-render the map whenever an input changes ----
   observeEvent({input$year; input$colorby; input$race; input$removePrecincts; input$scale; input$filterPrecincts}, {
     mapPalette = updateColor()
     MapProxy %>% clearControls() %>% clearShapes()
@@ -233,26 +208,60 @@ server <- function(input, output, session) {
     MapProxy %>% addPolygons(data = filteredPrecincts(),
                              layerId = ~Precinct,
                              color = mapPalette(countryVar()),
-                             weight = 2, fillOpacity = .6,
-                             label = filteredPrecincts()$Precinct,
-                             labelOptions = labelOptions(
-                               style = list("font-weight" = "normal", padding = "3px 8px",
-                                            textsize = "15px", direction = "auto")
-                             ))
+                             weight = 2, fillOpacity = .6
+                             #label = filteredPrecincts()$Precinct,
+                             #labelOptions = labelOptions(
+                             #  style = list("font-weight" = "normal", padding = "3px 8px",
+                            #                textsize = "15px", direction = "auto"))
+                             )
     MapProxy %>% addLegend('bottomleft',
-                title = ifelse(input$colorby %in% c("arrests_weighted", "race_weighted"),
-                               "Arrests per 1000 people",
-                               ifelse( input$colorby %in% c("race_dist") ,
-                                       "Population", "Arrests")),
-                pal = mapPalette, values = countryVar(), opacity = 0.7,
-               labFormat = labelFormat(transform = ifelse(input$scale == 'Logarithmic',
-                                                           exp_minus_one ,
-                                                           identity)))
+                           title = ifelse(input$colorby %in% c("arrests_weighted", "race_weighted"),
+                                          "Arrests per 1000 people",
+                                          ifelse( input$colorby %in% c("race_dist") ,
+                                                  "Population", "Arrests")),
+                           pal = mapPalette, values = countryVar(), opacity = 0.7,
+                           labFormat = labelFormat(transform = ifelse(input$scale == 'Logarithmic',
+                                                                      exp_minus_one ,
+                                                                      identity)))
     if ( input$filterPrecincts[1]  != "Show all" ) {
       MapProxy %>% addPolygons(data = filteredPrecincts(),
                                color = 'red', weight = 2,
                                fill = FALSE, opacity = 1)
     }
+  })
+  
+  #Show pop-up on click event 
+  observeEvent(input$nycMap_shape_click, {
+    click <- input$nycMap_shape_click
+    # Precinct information:
+    precinctOver <- precincts1[precincts1$Precinct==click$id,]
+    precinctOverData <- arrestDat()[arrestDat()$Precinct==click$id,]
+    
+    text <- paste(
+      sprintf(
+        "<b><center><h2>Precinct %s</h2></center></b></br>
+                        <b>Area:</b> %s square miles</br>
+                        <table style='width:100%%'><tr><td><b>Population:</b> %s (2010 census)",
+        precinctOverData$Precinct, round(precinctOverData$Area, 2), precinctOverData$Population),
+      createTextRow("White", precinctOverData$White, precinctOverData$Population),
+      createTextRow("Black", precinctOverData$Black, precinctOverData$Population),
+      createTextRow("Hispanic", precinctOverData$Hisp, precinctOverData$Population),
+      #createTextRow("Asian/Pac. Islndr", precinctOverData$AsPac, precinctOverData$Population),
+      #createTextRow("Native American", precinctOverData$Native, precinctOverData$Population),
+      
+      sprintf("<td><b>Total number of arrests:</b> %s", precinctOverData$TotalA),
+      createTextRow("White", precinctOverData$WhiteA, precinctOverData$TotalA),
+      createTextRow("Black", precinctOverData$BlackA, precinctOverData$TotalA),
+      createTextRow("Hispanic", precinctOverData$HispA, precinctOverData$TotalA),
+      #createTextRow("Asian/Pac. Islndr", precinctOverData$AsPacA, precinctOverData$TotalA),
+      #createTextRow("Native American", precinctOverData$NativeA, precinctOverData$TotalA),
+      sep="<br/>")
+
+    # Highlights precinct:
+    MapProxy %>%
+      addPolygons(data=precinctOver, layerId='highlighted', color="white", fill = FALSE)
+    MapProxy %>% clearPopups() %>%
+      addPopups(click$lng, click$lat, text)
   })
 }
 
