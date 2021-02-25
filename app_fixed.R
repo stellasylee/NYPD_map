@@ -15,6 +15,8 @@ if(!exists("precincts1")) precincts1 <- sf::st_read(paste0(path, "\\precincts1\\
 pop_data <- arrestData[arrestData$Year == 2010,]
 pop_data <- select(pop_data, "Precinct", "Population", "Area", "AsPac", "Black", "Hisp", "Native", "White")
 
+
+exp_minus_one <- function(x) { round( exp(x)-1 ) }
 #--------------------------------------------------------------------------------------------------------------------#
 #                                             DEFINE USER INTERFACE                                                  #
 #--------------------------------------------------------------------------------------------------------------------#
@@ -109,7 +111,7 @@ ui <- dashboardPage(dashboardHeader(title = "Stop-and-Frisk in New York City"),
 #                                             DEFINE SERVER LOGIC                                                    #
 #--------------------------------------------------------------------------------------------------------------------#
 
-server <- function(input, output) {
+server <- function(input, output,session) {
   #----------------------------------------------------------------------------------------------------------------#
   #                                                 CREATE MAP                                                     #
   #----------------------------------------------------------------------------------------------------------------#
@@ -119,99 +121,101 @@ server <- function(input, output) {
     map_data = aggregate(map_data, by = list(Precinct = map_data$Precinct), FUN = sum)
     map_data = select(map_data, "Precinct", "AsPacA", "BlackA", "HispA", "NativeA", "WhiteA", "TotalA")
     map_data = left_join(map_data, pop_data, by = "Precinct")
+    return(map_data)
   }
   
-  arrestDat <- reactive({
-    map_data = arrestData[arrestData$Year >= input$year[1] & arrestData$Year <= input$year[2], ]
-    map_data = aggregate(map_data, by = list(Precinct = map_data$Precinct), FUN = sum)
-    map_data = select(map_data, "Precinct", "AsPacA", "BlackA", "HispA", "NativeA", "WhiteA", "TotalA")
-    map_data = left_join(map_data, pop_data, by = "Precinct")
-    return(map_data)
-  })
-  
   # Determines the visible precincts based on both selectize inputs
-  allowedPrecincts <- reactive({
-    if(input$filterPrecincts[1] == "Show all")
+  allowedPrecincts <- function (){
+    if(input$filterPrecincts[1] == "Show all"){
       show <- precincts1$Precinct
-    else
+    }
+    else {
       show <- input$filterPrecincts
+    }
     hide <- input$removePrecincts
-    
     return(setdiff(show, hide))
-  })
+  }
   
   # Filter shapes to only show visible precincts
-  filteredPrecincts <- reactive({
-    precincts1[(precincts1$Precinct %in% allowedPrecincts()), ]
-  })
+  updateFilterShapes <- function (){
+    filtered_precincts = precincts1[(precincts1$Precinct %in% allowedPrecincts()), ]
+    return(filtered_precincts)
+  }
   
   # Same as above, but for data
-  filteredData <- reactive({
-    arrestDat <- arrestDat()
-    arrestDat[(arrestDat$Precinct %in% allowedPrecincts()), ]
-  })
+  updateFilterData <- function (){
+    map_data = updateYear()
+    filtered_data = map_data[(map_data$Precinct %in% allowedPrecincts()),]
+    return(filtered_data)
+  }
   
-  countryVar <- reactive({
+  countryVar <- function () ({
+    filtered_data = updateFilterData()
     linearValues <- {
       if(input$colorby == "race_dist"){
         switch(as.character(input$race),
-               "W" = filteredData()$White,
-               "B" = filteredData()$Black,
-               "H" = filteredData()$Hisp,
-               "A" = filteredData()$AsPac,
-               "N" = filteredData()$Native)
+               "W" = filtered_data$White,
+               "B" = filtered_data$Black,
+               "H" = filtered_data$Hisp,
+               "A" = filtered_data$AsPac,
+               "N" = filtered_data$Native)
       } else if(input$colorby == "race_arr"){
         switch(as.character(input$race),
-               "W" = filteredData()$WhiteA,
-               "B" = filteredData()$BlackA,
-               "H" = filteredData()$HispA,
-               "A" = filteredData()$AsPacA,
-               "N" = filteredData()$NativeA)
+               "W" = filtered_data$WhiteA,
+               "B" = filtered_data$BlackA,
+               "H" = filtered_data$HispA,
+               "A" = filtered_data$AsPacA,
+               "N" = filtered_data$NativeA)
       } else if ( input$colorby == "race_weighted") {
         switch(as.character(input$race),
-               "W" = filteredData()$WhiteA/filteredData()$White*1000,
-               "B" = filteredData()$BlackA/filteredData()$Black*1000,
-               "H" = filteredData()$HispA/filteredData()$Hisp*1000,
-               "A" = filteredData()$AsPacA/filteredData()$AsPac*1000,
-               "N" = filteredData()$NativeA/filteredData()$Native*1000,
+               "W" = filtered_data$WhiteA/filtered_data$White*1000,
+               "B" = filtered_data$BlackA/filtered_data$Black*1000,
+               "H" = filtered_data$HispA/filtered_data$Hisp*1000,
+               "A" = filtered_data$AsPacA/filtered_data$AsPac*1000,
+               "N" = filtered_data$NativeA/filtered_data$Native*1000,
         )
       } else {
         switch(as.character(input$colorby),
-               "arrests_weighted" = filteredData()$TotalA/filteredData()$Population*1000,
-               "arrests_raw" = filteredData()$TotalA)}
+               "arrests_weighted" = filtered_data$TotalA/filtered_data$Population*1000,
+               "arrests_raw" = filtered_data$TotalA)}
     }
     
-    if( input$scale == 'Logarithmic') { log(linearValues+1)
-    } else { linearValues }
+    if( input$scale == 'Logarithmic'){
+      return (log(linearValues+1))
+    }else {
+      return (linearValues) }
     
   })
   
-  updateColor <- function (){
-    values = countryVar()
-    lower = min(values)
-    upper = max(values)
-    palette = leaflet::colorNumeric(rev(heat.colors(10)), c(lower, upper), 10)(values)
+  updateColor <- function (vals=seq(0,10)){
+    lower = min(vals)
+    upper = max(vals)
+    return(leaflet::colorNumeric(rev(heat.colors(10)), c(lower, upper), 10))
   }
   
   
   updateMarkers <- function (){
     #   Renders markers if there are
+    values = countryVar()
+    filtered_precincts = updateFilterShapes()
+    
     MapProxy %>% clearMarkers()
-    MapProxy %>% addPolygons(data = filteredPrecincts(),
+    MapProxy %>% addPolygons(data = filtered_precincts,
                              layerId = ~Precinct,
-                             color = palette,
+                             color = updateColor(values)(values),
                              weight = 2, fillOpacity = .6) 
     MapProxy %>% addLegend('bottomleft',
                            title = ifelse(input$colorby %in% c("arrests_weighted", "race_weighted"),
                                           "Arrests per 1000 people",
                                           ifelse( input$colorby %in% c("race_dist") ,
                                                   "Population", "Arrests")),
-                           pal = palette, values = countryVar(), opacity = 0.7,
+                           pal = updateColor(values),
+                           values = countryVar(), opacity = 0.7,
                            labFormat = labelFormat(transform = ifelse(input$scale == 'Logarithmic',
                                                                       exp_minus_one ,
                                                                       identity)))
     if (input$filterPrecincts[1]  != "Show all" ) {
-      MapProxy %>% addPolygons(data = filteredPrecincts(),
+      MapProxy %>% addPolygons(data = filtered_precincts,
                                color = 'red', weight = 2,
                                fill = FALSE, opacity = 1)
     }
@@ -234,29 +238,17 @@ server <- function(input, output) {
     updateMarkers()
   })
   
-  # Update map when new color is selected
-  observeEvent({input$year}, {
-    updateMarkers()
-  })
-  
-  # Update map when new removing precinct is selected
-  observeEvent({input$colorby}, {
-    updateColor()
-  })
-  
   # Update map when new filter is selected
-  observeEvent({input$filterPrecincts}, {
-    # Prevents users from picking "Show all" with other precincts
-    if ( "Show all" %in% input$filterPrecincts &
-         input$filterPrecincts %>% length %>% is_greater_than( 1 )) {
-      if( input$filterPrecincts[1] == "Show all" ) {
-        updateSelectizeInput(session, inputId = "filterPrecincts",
-                             selected = input$filterPrecincts %>% setdiff( "Show all" ))
-      } else {
-        updateSelectizeInput(session, inputId = "filterPrecincts",
-                             selected = "Show all")}}
+  observeEvent({input$removePrecincts; input$filterPrecincts; input$scale}, {
+    updateFilterShapes()
+    updateFilterData()
     # Update the markers on the map
     updateMarkers()
+  })
+  
+  # Update map when new color is selected
+  observeEvent({input$colorby; input$race}, {
+    updateColor()
   })
   
 }
