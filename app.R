@@ -8,7 +8,14 @@ library(rgeos)
 library(sf)
 library(htmltools)
 
-source('initialize.R')
+# Load dataset  ----
+path = "<Insert the path>"
+
+arrestData <- read.csv(paste0(path, "ArrestDat.csv"), header=TRUE)
+precincts1 <- sf::st_read(paste0(path, "\\precincts1\\nypp.shp"))
+map_data = arrestData[arrestData$Year == 2017, ]
+
+exp_minus_one <- function(x) { round( exp(x)-1 ) }
 print("Finished initializing")
 
 #--------------------------------------------------------------------------------------------------------------------#
@@ -203,7 +210,7 @@ server <- function(input, output, session) {
   # Re-render the map whenever an input changes ----
   observeEvent({input$year; input$colorby; input$race; input$removePrecincts; input$scale; input$filterPrecincts}, {
     mapPalette = updateColor()
-    MapProxy %>% clearControls() %>% clearShapes()
+    MapProxy %>% clearControls() %>% clearShapes()  %>% clearPopups()
     
     MapProxy %>% addPolygons(data = filteredPrecincts(),
                              layerId = ~Precinct,
@@ -212,8 +219,8 @@ server <- function(input, output, session) {
                              #label = filteredPrecincts()$Precinct,
                              #labelOptions = labelOptions(
                              #  style = list("font-weight" = "normal", padding = "3px 8px",
-                            #                textsize = "15px", direction = "auto"))
-                             )
+                             #                textsize = "15px", direction = "auto"))
+    )
     MapProxy %>% addLegend('bottomleft',
                            title = ifelse(input$colorby %in% c("arrests_weighted", "race_weighted"),
                                           "Arrests per 1000 people",
@@ -237,26 +244,31 @@ server <- function(input, output, session) {
     precinctOver <- precincts1[precincts1$Precinct==click$id,]
     precinctOverData <- arrestDat()[arrestDat()$Precinct==click$id,]
     
-    text <- paste(
-      sprintf(
-        "<b><center><h2>Precinct %s</h2></center></b></br>
-                        <b>Area:</b> %s square miles</br>
-                        <table style='width:100%%'><tr><td><b>Population:</b> %s (2010 census)",
-        precinctOverData$Precinct, round(precinctOverData$Area, 2), precinctOverData$Population),
-      createTextRow("White", precinctOverData$White, precinctOverData$Population),
-      createTextRow("Black", precinctOverData$Black, precinctOverData$Population),
-      createTextRow("Hispanic", precinctOverData$Hisp, precinctOverData$Population),
-      #createTextRow("Asian/Pac. Islndr", precinctOverData$AsPac, precinctOverData$Population),
-      #createTextRow("Native American", precinctOverData$Native, precinctOverData$Population),
-      
-      sprintf("<td><b>Total number of arrests:</b> %s", precinctOverData$TotalA),
-      createTextRow("White", precinctOverData$WhiteA, precinctOverData$TotalA),
-      createTextRow("Black", precinctOverData$BlackA, precinctOverData$TotalA),
-      createTextRow("Hispanic", precinctOverData$HispA, precinctOverData$TotalA),
-      #createTextRow("Asian/Pac. Islndr", precinctOverData$AsPacA, precinctOverData$TotalA),
-      #createTextRow("Native American", precinctOverData$NativeA, precinctOverData$TotalA),
-      sep="<br/>")
-
+    text <- sprintf(
+      "<b><center><h2>Precinct %s</h2></center></b></br>
+       <b>Area:</b> %s square miles</br>
+       <table style='width:100%%'><tr>
+        <td><b>Population:</b> %s (2010 census)</td>
+        <td><b>Total number of arrests:</b> %s </td>
+        <tr>
+        <td><b>White people:</b> %s ( %s %%) </td>
+        <td><b>White people:</b> %s ( %s %%) </td>
+        <tr>
+        <td><b>Black people:</b> %s ( %s %%) </td>
+        <td><b>Black people:</b> %s ( %s %%) </td>
+        <tr>
+        <td><b>Hispanic people:</b> %s ( %s %%) </td>
+        <td><b>Hispanic people:</b> %s ( %s %%) </td>",
+      precinctOverData$Precinct, round(precinctOverData$Area, 2), 
+      precinctOverData$Population, precinctOverData$TotalA,
+      precinctOverData$White, round(precinctOverData$White/precinctOverData$Population*100,2),
+      precinctOverData$WhiteA, round(precinctOverData$WhiteA/precinctOverData$TotalA*100,2),
+      precinctOverData$Black, round(precinctOverData$Black/precinctOverData$Population*100,2),
+      precinctOverData$BlackA, round(precinctOverData$BlackA/precinctOverData$TotalA*100,2),
+      precinctOverData$Hisp, round(precinctOverData$Hisp/precinctOverData$Population*100,2),
+      precinctOverData$HispA, round(precinctOverData$HispA/precinctOverData$TotalA*100,2)
+    )
+    
     # Highlights precinct:
     MapProxy %>%
       addPolygons(data=precinctOver, layerId='highlighted', color="white", fill = FALSE)
